@@ -1,10 +1,10 @@
-name: build-win32
+name: probe-win32
 on:
   push:
   workflow_dispatch:
 
 jobs:
-  win32:
+  probe:
     runs-on: windows-latest
     defaults:
       run:
@@ -15,32 +15,25 @@ jobs:
       - uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW32
-          install: >-
-            base-devel
-            make
-            pkg-config
-            mingw-w64-i686-toolchain
-            mingw-w64-i686-pkgconf
-            mingw-w64-i686-libimobiledevice
-            mingw-w64-i686-libirecovery
-            mingw-w64-i686-libusb
-            mingw-w64-i686-libplist
-            mingw-w64-i686-openssl
-            mingw-w64-i686-curl
-            mingw-w64-i686-libssh2
+          install: base-devel make pkg-config
 
-      - name: Show which libs pkg-config can see
-        run: pkg-config --modversion libimobiledevice-1.0 libirecovery-1.0 libusb-1.0 libplist-2.0 openssl libcurl libssh2 || true
-
-      - name: Build (32-bit)
-        run: make CC=gcc V=1 2>&1 | tee build.log
-
-      - name: Collect binary + log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: tr4mpass-win32
-          path: |
-            tr4mpass.exe
-            tr4mpass
-            build.log
+      - name: Probe i686 packages
+        run: |
+          echo "=== uname ==="
+          uname -a || true
+          echo "=== gcc target ==="
+          gcc -dumpmachine || true
+          echo "=== repo list ==="
+          pacman-conf --repo-list || true
+          echo "=== package availability ==="
+          for p in mingw-w64-i686-toolchain mingw-w64-i686-pkgconf \
+                   mingw-w64-i686-libimobiledevice mingw-w64-i686-libirecovery \
+                   mingw-w64-i686-libusb mingw-w64-i686-libplist \
+                   mingw-w64-i686-openssl mingw-w64-i686-curl \
+                   mingw-w64-i686-libssh2; do
+            if pacman -Si "$p" >/dev/null 2>&1; then
+              echo "FOUND   $p  $(pacman -Si "$p" | awk -F': ' '/^Version/{print $2; exit}')"
+            else
+              echo "MISSING $p"
+            fi
+          done
