@@ -80,7 +80,7 @@ autotools_stage() {
   make install
 }
 
-# Library-only install: the library + headers + .pc install fine;
+# Library-only install: library + headers + .pc install fine;
 # only the bundled command-line TOOL fails to link (run #8 diag).
 libonly_install() {
   make -C src install
@@ -105,32 +105,6 @@ s_irecv() {
   cd "$SRC/libirecovery" && libonly_install
 }
 
-# run #8: libimobiledevice requires libtatsu-1.0 >= 1.0.3 (new upstream dep)
-s_tatsu() {
-  autotools_stage libtatsu https://github.com/libimobiledevice/libtatsu.git \
-    --enable-static --disable-shared
-}
-
-s_imd() {
-  autotools_stage libimobiledevice https://github.com/libimobiledevice/libimobiledevice.git \
-    --enable-static --disable-shared --without-cython \
-    LDFLAGS="-L$PREFIX/lib -lws2_32 -lcrypt32 -liphlpapi"
-}
-
-# run #8: git master has no ./configure and autogen failed silently;
-# the release tarball ships a prebuilt configure.
-s_ssh2() {
-  local v=1.11.1
-  fetch "libssh2-$v" "https://github.com/libssh2/libssh2/releases/download/libssh2-$v/libssh2-$v.tar.gz" || return 1
-  cd "$SRC/libssh2-$v" || return 1
-  ./configure --host="$HOST" --build="$(gcc -dumpmachine)" --prefix="$PREFIX" \
-    --enable-static --disable-shared --with-crypto=openssl \
-    --with-libssl-prefix="$PREFIX" --without-libz --disable-examples-build \
-    LDFLAGS="-L$PREFIX/lib -lws2_32 -lcrypt32 -lgdi32 -ladvapi32"
-  make -j"$JOBS"
-  make install
-}
-
 s_curl() {
   cd "$SRC" || return 1
   rm -rf curl
@@ -152,16 +126,43 @@ s_curl() {
   return 0
 }
 
+# diag2.txt run #9: tatsu failed ONLY on "libcurl >= 7.0 ... not found",
+# because curl built AFTER tatsu. Fix = stage order (curl first).
+s_tatsu() {
+  autotools_stage libtatsu https://github.com/libimobiledevice/libtatsu.git \
+    --enable-static --disable-shared
+}
+
+s_imd() {
+  autotools_stage libimobiledevice https://github.com/libimobiledevice/libimobiledevice.git \
+    --enable-static --disable-shared --without-cython \
+    LDFLAGS="-L$PREFIX/lib -lws2_32 -lcrypt32 -liphlpapi"
+}
+
+# diag2.txt run #9: openssl backend not detected through our hand-written .pc.
+# wincng = Windows native crypto (bcrypt/crypt32), needs NO openssl at all.
+s_ssh2() {
+  local v=1.11.1
+  fetch "libssh2-$v" "https://github.com/libssh2/libssh2/releases/download/libssh2-$v/libssh2-$v.tar.gz" || return 1
+  cd "$SRC/libssh2-$v" || return 1
+  ./configure --host="$HOST" --build="$(gcc -dumpmachine)" --prefix="$PREFIX" \
+    --enable-static --disable-shared --with-crypto=wincng \
+    --without-libz --disable-examples-build \
+    LDFLAGS="-L$PREFIX/lib"
+  make -j"$JOBS"
+  make install
+}
+
 run_stage openssl            openssl_stage
 run_stage libusb             s_libusb
 run_stage libplist           s_plist
 run_stage glue               s_glue
 run_stage libusbmuxd         s_usbmuxd
 run_stage libirecovery       s_irecv
+run_stage curl               s_curl
 run_stage tatsu              s_tatsu
 run_stage libimobiledevice   s_imd
 run_stage libssh2            s_ssh2
-run_stage curl               s_curl
 
 {
   echo "########## SUMMARY ##########"
