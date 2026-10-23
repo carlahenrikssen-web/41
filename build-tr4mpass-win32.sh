@@ -6,7 +6,8 @@ export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig"
 export PKG_CONFIG_LIBDIR="$PREFIX/lib/pkgconfig"
 export PATH="$PREFIX/bin:$PATH"
 
-LIBS="libimobiledevice-1.0 libirecovery-1.0 libusb-1.0 libplist-2.0 openssl libcurl libssh2"
+# libtatsu added: static libimobiledevice pulls its symbols (run #8 finding)
+LIBS="libimobiledevice-1.0 libirecovery-1.0 libusb-1.0 libplist-2.0 openssl libcurl libssh2 libtatsu-1.0"
 
 CF="$(pkg-config --cflags $LIBS)"
 # --static is required: several libs are static archives now, and their

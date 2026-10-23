@@ -15,6 +15,10 @@ export LDFLAGS="-L$PREFIX/lib"
 mkdir -p "$PREFIX/lib/pkgconfig" "$PREFIX/include" "$SRC" "$LOGDIR"
 RESULTS=()
 
+# diag.txt run #8: ld failed with -lIphlpapi (capital I). MinGW ships it
+# lowercase; provide an exact-case copy so any spelling links.
+cp -n /usr/i686-w64-mingw32/lib/libiphlpapi.a "$PREFIX/lib/libIphlpapi.a" 2>/dev/null || true
+
 run_stage() {
   local name="$1"; shift
   local lf="$LOGDIR/$name.log"
@@ -24,7 +28,6 @@ run_stage() {
   else
     RESULTS+=("FAIL|$name")
     echo "########## FAIL $name ##########"
-    echo "----- last 25 lines of $name -----"
     tail -25 "$lf" || true
     grep -nE 'error:|Error |No package|not found|undefined reference|cannot find|fatal' "$lf" | tail -10 || true
   fi
@@ -55,6 +58,8 @@ openssl_stage() {
         "$PREFIX" "$v" > "$PREFIX/lib/pkgconfig/openssl.pc"
       printf 'prefix=%s\nlibdir=${prefix}/lib\nincludedir=${prefix}/include\n\nName: libcrypto\nDescription: OpenSSL libcrypto\nVersion: %s\nLibs: -L${libdir} -lcrypto\nLibs.private: -lws2_32 -lcrypt32 -lgdi32 -ladvapi32 -luser32\nCflags: -I${includedir}\n' \
         "$PREFIX" "$v" > "$PREFIX/lib/pkgconfig/libcrypto.pc"
+      printf 'prefix=%s\nlibdir=${prefix}/lib\nincludedir=${prefix}/include\n\nName: libssl\nDescription: OpenSSL libssl\nVersion: %s\nLibs: -L${libdir} -lssl\nLibs.private: -lcrypto -lws2_32 -lcrypt32 -lgdi32 -ladvapi32 -luser32\nCflags: -I${includedir}\n' \
+        "$PREFIX" "$v" > "$PREFIX/lib/pkgconfig/libssl.pc"
       return 0
     fi
   done
@@ -75,26 +80,56 @@ autotools_stage() {
   make install
 }
 
+# Library-only install: the library + headers + .pc install fine;
+# only the bundled command-line TOOL fails to link (run #8 diag).
+libonly_install() {
+  make -C src install
+  make -C include install
+}
+
 s_libusb() { autotools_stage libusb https://github.com/libusb/libusb.git --disable-static --enable-shared; }
 s_plist()  { autotools_stage libplist https://github.com/libimobiledevice/libplist.git --disable-static --enable-shared --without-cython; }
 s_glue()   { autotools_stage libimobiledevice-glue https://github.com/libimobiledevice/libimobiledevice-glue.git --disable-static --enable-shared; }
 
-s_usbmuxd() { autotools_stage libusbmuxd https://github.com/libimobiledevice/libusbmuxd.git \
-  --enable-static --disable-shared --without-cython \
-  LDFLAGS="-L$PREFIX/lib -lws2_32 -liphlpapi"; }
+s_usbmuxd() {
+  autotools_stage libusbmuxd https://github.com/libimobiledevice/libusbmuxd.git \
+    --enable-static --disable-shared --without-cython \
+    LDFLAGS="-L$PREFIX/lib -lws2_32 -liphlpapi" &&
+  cd "$SRC/libusbmuxd" && libonly_install
+}
 
-s_irecv() { autotools_stage libirecovery https://github.com/libimobiledevice/libirecovery.git \
-  --enable-static --disable-shared \
-  LDFLAGS="-L$PREFIX/lib -lws2_32"; }
+s_irecv() {
+  autotools_stage libirecovery https://github.com/libimobiledevice/libirecovery.git \
+    --enable-static --disable-shared \
+    LDFLAGS="-L$PREFIX/lib -lws2_32 -liphlpapi" &&
+  cd "$SRC/libirecovery" && libonly_install
+}
 
-s_imd() { autotools_stage libimobiledevice https://github.com/libimobiledevice/libimobiledevice.git \
-  --enable-static --disable-shared --without-cython \
-  LDFLAGS="-L$PREFIX/lib -lws2_32 -lcrypt32 -liphlpapi"; }
+# run #8: libimobiledevice requires libtatsu-1.0 >= 1.0.3 (new upstream dep)
+s_tatsu() {
+  autotools_stage libtatsu https://github.com/libimobiledevice/libtatsu.git \
+    --enable-static --disable-shared
+}
 
-s_ssh2() { autotools_stage libssh2 https://github.com/libssh2/libssh2.git \
-  --enable-static --disable-shared --with-crypto=openssl \
-  --with-libssl-prefix="$PREFIX" --without-libz --disable-examples-build \
-  LDFLAGS="-L$PREFIX/lib -lws2_32 -lcrypt32 -lgdi32 -ladvapi32"; }
+s_imd() {
+  autotools_stage libimobiledevice https://github.com/libimobiledevice/libimobiledevice.git \
+    --enable-static --disable-shared --without-cython \
+    LDFLAGS="-L$PREFIX/lib -lws2_32 -lcrypt32 -liphlpapi"
+}
+
+# run #8: git master has no ./configure and autogen failed silently;
+# the release tarball ships a prebuilt configure.
+s_ssh2() {
+  local v=1.11.1
+  fetch "libssh2-$v" "https://github.com/libssh2/libssh2/releases/download/libssh2-$v/libssh2-$v.tar.gz" || return 1
+  cd "$SRC/libssh2-$v" || return 1
+  ./configure --host="$HOST" --build="$(gcc -dumpmachine)" --prefix="$PREFIX" \
+    --enable-static --disable-shared --with-crypto=openssl \
+    --with-libssl-prefix="$PREFIX" --without-libz --disable-examples-build \
+    LDFLAGS="-L$PREFIX/lib -lws2_32 -lcrypt32 -lgdi32 -ladvapi32"
+  make -j"$JOBS"
+  make install
+}
 
 s_curl() {
   cd "$SRC" || return 1
@@ -123,6 +158,7 @@ run_stage libplist           s_plist
 run_stage glue               s_glue
 run_stage libusbmuxd         s_usbmuxd
 run_stage libirecovery       s_irecv
+run_stage tatsu              s_tatsu
 run_stage libimobiledevice   s_imd
 run_stage libssh2            s_ssh2
 run_stage curl               s_curl
