@@ -19,21 +19,31 @@ jobs:
 
       - name: Probe i686 packages
         run: |
-          echo "=== uname ==="
-          uname -a || true
-          echo "=== gcc target ==="
-          gcc -dumpmachine || true
-          echo "=== repo list ==="
-          pacman-conf --repo-list || true
-          echo "=== package availability ==="
-          for p in mingw-w64-i686-toolchain mingw-w64-i686-pkgconf \
-                   mingw-w64-i686-libimobiledevice mingw-w64-i686-libirecovery \
-                   mingw-w64-i686-libusb mingw-w64-i686-libplist \
-                   mingw-w64-i686-openssl mingw-w64-i686-curl \
-                   mingw-w64-i686-libssh2; do
-            if pacman -Si "$p" >/dev/null 2>&1; then
-              echo "FOUND   $p  $(pacman -Si "$p" | awk -F': ' '/^Version/{print $2; exit}')"
-            else
-              echo "MISSING $p"
-            fi
-          done
+          {
+            echo "gcc target: $(gcc -dumpmachine)"
+            echo "uname: $(uname -s -m)"
+            echo "repos: $(pacman-conf --repo-list | tr '\n' ' ')"
+            for p in mingw-w64-i686-toolchain mingw-w64-i686-pkgconf \
+                     mingw-w64-i686-libimobiledevice mingw-w64-i686-libirecovery \
+                     mingw-w64-i686-libusb mingw-w64-i686-libplist \
+                     mingw-w64-i686-openssl mingw-w64-i686-curl \
+                     mingw-w64-i686-libssh2; do
+              if pacman -Si "$p" >/dev/null 2>&1; then
+                echo "FOUND|$p|$(pacman -Si "$p" | awk -F': *' '/^Version/{print $2; exit}')"
+              else
+                echo "MISSING|$p|-"
+              fi
+            done
+          } | tee probe-results.txt
+
+          echo '## Probe results' >> "$GITHUB_STEP_SUMMARY"
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          echo '| status | package | version |' >> "$GITHUB_STEP_SUMMARY"
+          echo '|---|---|---|' >> "$GITHUB_STEP_SUMMARY"
+          awk -F'|' '{printf "| %s | %s | %s |\n", $1, $2, $3}' probe-results.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: probe-results
+          path: probe-results.txt
