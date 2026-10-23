@@ -4,20 +4,35 @@ set -uo pipefail
 HOST=i686-w64-mingw32
 PREFIX="$HOME/win32"
 SRC="$HOME/bsrc"
+LOGDIR="$GITHUB_WORKSPACE/logs"
 JOBS="$(nproc 2>/dev/null || echo 4)"
 export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig"
 export PATH="$PREFIX/bin:$PATH"
 export PKG_CONFIG_ALLOW_CROSS=1
-mkdir -p "$PREFIX/lib/pkgconfig" "$PREFIX/include" "$SRC"
-RESULTS=()
+export CPPFLAGS="-I$PREFIX/include"
+export LDFLAGS="-L$PREFIX/lib"
+mkdir -p "$PREFIX/lib/pkgconfig" "$PREFIX/include" "$SRC" "$LOGDIR"
+RESULTS=(); FAILED=()
 
 run_stage() {
   local name="$1"; shift
-  echo; echo "########## START $name ##########"
-  if ( set -e; "$@" ); then
-    RESULTS+=("OK    $name"); echo "########## OK $name ##########"
+  local lf="$LOGDIR/$name.log"
+  echo "########## START $name ##########"
+  if ( set -e; "$@" ) > "$lf" 2>&1; then
+    RESULTS+=("OK|$name"); echo "########## OK $name ##########"
   else
-    RESULTS+=("FAIL  $name"); echo "########## FAIL $name ##########"
+    RESULTS+=("FAIL|$name"); FAILED+=("$name")
+    echo "########## FAIL $name ##########"
+    echo "----- tail $lf -----"
+    tail -30 "$lf" || true
+    echo "----- errors in $lf -----"
+    grep -nE 'error:|Error |undefined reference|cannot find|No such file|not found|failed' "$lf" | tail -12 || true
+    local cfg
+    cfg="$(find "$SRC" -maxdepth 2 -name config.log 2>/dev/null | xargs -r ls -t 2>/dev/null | head -1)"
+    if [ -n "${cfg:-}" ]; then
+      echo "----- tail $cfg -----"
+      tail -25 "$cfg" || true
+    fi
   fi
 }
 
@@ -35,16 +50,17 @@ openssl_stage() {
   local v
   for v in 3.0.15 3.0.13 3.0.11; do
     if fetch "openssl-$v" "https://github.com/openssl/openssl/releases/download/openssl-$v/openssl-$v.tar.gz"; then
-      cd "$SRC/openssl-$v"
+      cd "$SRC/openssl-$v" || return 1
       ./Configure mingw no-shared no-tests no-docs \
         --prefix="$PREFIX" --cross-compile-prefix="$HOST-" > /dev/null
       make -j"$JOBS" build_libs
-      make install_dev > /dev/null 2>&1 || true
-      mkdir -p "$PREFIX/include/openssl" "$PREFIX/lib"
+      mkdir -p "$PREFIX/lib" "$PREFIX/include/openssl"
       cp -f libcrypto.a libssl.a "$PREFIX/lib/" 2>/dev/null || true
       cp -f include/openssl/*.h "$PREFIX/include/openssl/" 2>/dev/null || true
-      printf 'prefix=%s\nlibdir=${prefix}/lib\nincludedir=${prefix}/include\n\nName: OpenSSL\nDescription: OpenSSL\nVersion: %s\nLibs: -L${libdir} -lssl -lcrypto -lws2_32 -lcrypt32 -lgdi32 -ladvapi32 -luser32\nCflags: -I${includedir}\n' \
+      printf 'prefix=%s\nlibdir=${prefix}/lib\nincludedir=${prefix}/include\n\nName: OpenSSL\nDescription: OpenSSL\nVersion: %s\nLibs: -L${libdir} -lssl -lcrypto -lws2_32 -lcrypt32 -lgdi32 -ladvapi32 -luser32\nLibs.private: -lws2_32 -lcrypt32 -lgdi32 -ladvapi32 -luser32\nCflags: -I${includedir}\n' \
         "$PREFIX" "$v" > "$PREFIX/lib/pkgconfig/openssl.pc"
+      printf 'prefix=%s\nlibdir=${prefix}/lib\nincludedir=${prefix}/include\n\nName: libcrypto\nDescription: OpenSSL libcrypto\nVersion: %s\nLibs: -L${libdir} -lcrypto -lws2_32 -lcrypt32 -lgdi32 -ladvapi32 -luser32\nCflags: -I${includedir}\n' \
+        "$PREFIX" "$v" > "$PREFIX/lib/pkgconfig/libcrypto.pc"
       return 0
     fi
   done
@@ -60,47 +76,71 @@ autotools_stage() {
   if [ ! -x ./configure ]; then
     ( NOCONFIGURE=1 ./autogen.sh || ./bootstrap || ./buildconf ) > /dev/null 2>&1 || true
   fi
-  ./configure --host="$HOST" --prefix="$PREFIX" "$@"
+  ./configure --host="$HOST" --prefix="$PREFIX" --build="$(gcc -dumpmachine)" "$@"
   make -j"$JOBS"
   make install
 }
 
-s_libusb()  { autotools_stage libusb https://github.com/libusb/libusb.git \
-                --disable-static --enable-shared; }
-s_plist()   { autotools_stage libplist https://github.com/libimobiledevice/libplist.git \
-                --disable-static --enable-shared --without-cython; }
-s_glue()    { autotools_stage libimobiledevice-glue https://github.com/libimobiledevice/libimobiledevice-glue.git \
-                --disable-static --enable-shared; }
-s_usbmuxd() { autotools_stage libusbmuxd https://github.com/libimobiledevice/libusbmuxd.git \
-                --disable-static --enable-shared --without-cython; }
-s_irecv()   { autotools_stage libirecovery https://github.com/libimobiledevice/libirecovery.git \
-                --disable-static --enable-shared; }
-s_imd()     { autotools_stage libimobiledevice https://github.com/libimobiledevice/libimobiledevice.git \
-                --disable-static --enable-shared --without-cython; }
-s_ssh2()    { autotools_stage libssh2 https://github.com/libssh2/libssh2.git \
-                --disable-static --enable-shared --with-crypto=openssl; }
-s_curl()    { autotools_stage curl https://github.com/curl/curl.git \
-                --disable-static --enable-shared --with-schannel --without-ssl \
-                --without-libpsl --without-zlib --disable-ldap --disable-threaded-resolver; }
+s_libusb()  { autotools_stage libusb https://github.com/libusb/libusb.git --disable-static --enable-shared; }
+s_plist()   { autotools_stage libplist https://github.com/libimobiledevice/libplist.git --disable-static --enable-shared --without-cython; }
+s_glue()    { autotools_stage libimobiledevice-glue https://github.com/libimobiledevice/libimobiledevice-glue.git --disable-static --enable-shared; }
+s_usbmuxd() { autotools_stage libusbmuxd https://github.com/libimobiledevice/libusbmuxd.git --disable-static --enable-shared --without-cython; }
+s_irecv()   { autotools_stage libirecovery https://github.com/libimobiledevice/libirecovery.git --disable-static --enable-shared; }
+s_imd()     { autotools_stage libimobiledevice https://github.com/libimobiledevice/libimobiledevice.git --disable-static --enable-shared --without-cython; }
 
-run_stage openssl        openssl_stage
-run_stage libusb         s_libusb
-run_stage libplist       s_plist
-run_stage glue           s_glue
-run_stage libusbmuxd     s_usbmuxd
-run_stage libirecovery   s_irecv
-run_stage libimobiledevice s_imd
-run_stage libssh2        s_ssh2
-run_stage curl           s_curl
+s_ssh2() {
+  autotools_stage libssh2 https://github.com/libssh2/libssh2.git \
+    --disable-static --enable-shared --with-crypto=openssl \
+    --with-libssl-prefix="$PREFIX" --without-libz --disable-examples-build
+}
 
-echo; echo "########## SUMMARY ##########"
-pkg-config --exists libimobiledevice-1.0 libirecovery-1.0 libusb-1.0 libplist-2.0 openssl libcurl libssh2 \
-  && echo "ALL_PKG_CONFIG_FOUND" || echo "SOME_PKG_CONFIG_MISSING"
-for p in openssl libusb-1.0 libplist-2.0 libirecovery-1.0 libimobiledevice-1.0 libssh2 libcurl; do
-  if pkg-config --exists "$p"; then
-    echo "OK       $p $(pkg-config --modversion "$p")"
-  else
-    echo "MISSING  $p"
-  fi
-done
+s_curl() {
+  cd "$SRC" || return 1
+  rm -rf curl
+  git clone --depth 1 https://github.com/curl/curl.git curl || return 1
+  cd curl || return 1
+  [ -x ./configure ] || ./buildconf > /dev/null 2>&1 || true
+  ./configure --host="$HOST" --build="$(gcc -dumpmachine)" --prefix="$PREFIX" \
+    --disable-static --enable-shared --with-schannel --without-ssl \
+    --without-libpsl --without-zlib --without-brotli --without-zstd \
+    --disable-ldap --disable-threaded-resolver --disable-manual \
+    --without-libidn2 --without-nghttp2 --disable-aws --disable-mqtt
+  make -j"$JOBS" -C lib
+  make -j"$JOBS" -C include
+  make install -C lib
+  make install -C include
+}
+
+run_stage openssl            openssl_stage
+run_stage libusb             s_libusb
+run_stage libplist           s_plist
+run_stage glue               s_glue
+run_stage libusbmuxd         s_usbmuxd
+run_stage libirecovery       s_irecv
+run_stage libimobiledevice   s_imd
+run_stage libssh2            s_ssh2
+run_stage curl               s_curl
+
+{
+  echo "########## SUMMARY ##########"
+  for r in "${RESULTS[@]}"; do echo "${r/|/  }"; done
+  echo
+  for p in openssl libusb-1.0 libplist-2.0 libirecovery-1.0 libimobiledevice-1.0 libssh2 libcurl; do
+    if pkg-config --exists "$p"; then
+      echo "OK       $p $(pkg-config --modversion "$p")"
+    else
+      echo "MISSING  $p"
+    fi
+  done
+} | tee "$LOGDIR/summary.txt"
+
+{
+  echo "## Build summary"
+  echo '| stage | result |'
+  echo '|---|---|'
+  for r in "${RESULTS[@]}"; do
+    echo "| ${r%%|*} | ${r##*|} |"
+  done
+} >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+
 mkdir -p win32dll && cp -f "$PREFIX/bin/"*.dll win32dll/ 2>/dev/null || true
