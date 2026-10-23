@@ -15,9 +15,10 @@ export LDFLAGS="-L$PREFIX/lib"
 mkdir -p "$PREFIX/lib/pkgconfig" "$PREFIX/include" "$SRC" "$LOGDIR"
 RESULTS=()
 
-# diag.txt run #8: ld failed with -lIphlpapi (capital I). MinGW ships it
-# lowercase; provide an exact-case copy so any spelling links.
+# run #8 diag: ld wanted -lIphlpapi (capital I); MinGW ships it lowercase.
 cp -n /usr/i686-w64-mingw32/lib/libiphlpapi.a "$PREFIX/lib/libIphlpapi.a" 2>/dev/null || true
+
+WINLIBS="-lws2_32 -lcrypt32 -lsecur32 -lbcrypt -ladvapi32 -lgdi32 -luser32"
 
 run_stage() {
   local name="$1"; shift
@@ -54,12 +55,12 @@ openssl_stage() {
       mkdir -p "$PREFIX/lib" "$PREFIX/include/openssl"
       cp -f libcrypto.a libssl.a "$PREFIX/lib/" 2>/dev/null || true
       cp -f include/openssl/*.h "$PREFIX/include/openssl/" 2>/dev/null || true
-      printf 'prefix=%s\nlibdir=${prefix}/lib\nincludedir=${prefix}/include\n\nName: OpenSSL\nDescription: OpenSSL\nVersion: %s\nLibs: -L${libdir} -lssl -lcrypto\nLibs.private: -lws2_32 -lcrypt32 -lgdi32 -ladvapi32 -luser32\nCflags: -I${includedir}\n' \
-        "$PREFIX" "$v" > "$PREFIX/lib/pkgconfig/openssl.pc"
-      printf 'prefix=%s\nlibdir=${prefix}/lib\nincludedir=${prefix}/include\n\nName: libcrypto\nDescription: OpenSSL libcrypto\nVersion: %s\nLibs: -L${libdir} -lcrypto\nLibs.private: -lws2_32 -lcrypt32 -lgdi32 -ladvapi32 -luser32\nCflags: -I${includedir}\n' \
-        "$PREFIX" "$v" > "$PREFIX/lib/pkgconfig/libcrypto.pc"
-      printf 'prefix=%s\nlibdir=${prefix}/lib\nincludedir=${prefix}/include\n\nName: libssl\nDescription: OpenSSL libssl\nVersion: %s\nLibs: -L${libdir} -lssl\nLibs.private: -lcrypto -lws2_32 -lcrypt32 -lgdi32 -ladvapi32 -luser32\nCflags: -I${includedir}\n' \
-        "$PREFIX" "$v" > "$PREFIX/lib/pkgconfig/libssl.pc"
+      printf 'prefix=%s\nlibdir=${prefix}/lib\nincludedir=${prefix}/include\n\nName: OpenSSL\nDescription: OpenSSL\nVersion: %s\nLibs: -L${libdir} -lssl -lcrypto\nLibs.private: %s\nCflags: -I${includedir}\n' \
+        "$PREFIX" "$v" "$WINLIBS" > "$PREFIX/lib/pkgconfig/openssl.pc"
+      printf 'prefix=%s\nlibdir=${prefix}/lib\nincludedir=${prefix}/include\n\nName: libcrypto\nDescription: OpenSSL libcrypto\nVersion: %s\nLibs: -L${libdir} -lcrypto\nLibs.private: %s\nCflags: -I${includedir}\n' \
+        "$PREFIX" "$v" "$WINLIBS" > "$PREFIX/lib/pkgconfig/libcrypto.pc"
+      printf 'prefix=%s\nlibdir=${prefix}/lib\nincludedir=${prefix}/include\n\nName: libssl\nDescription: OpenSSL libssl\nVersion: %s\nLibs: -L${libdir} -lssl\nLibs.private: -lcrypto %s\nCflags: -I${includedir}\n' \
+        "$PREFIX" "$v" "$WINLIBS" > "$PREFIX/lib/pkgconfig/libssl.pc"
       return 0
     fi
   done
@@ -80,8 +81,6 @@ autotools_stage() {
   make install
 }
 
-# Library-only install: library + headers + .pc install fine;
-# only the bundled command-line TOOL fails to link (run #8 diag).
 libonly_install() {
   make -C src install
   make -C include install
@@ -105,6 +104,10 @@ s_irecv() {
   cd "$SRC/libirecovery" && libonly_install
 }
 
+# run #10 diag: tatsu found libcurl via pkg-config but failed with
+#   tss.c:39:10: fatal error: curl/curl.h: No such file or directory
+# so curl's HEADERS were never installed into $PREFIX/include/curl.
+# Fix: install them explicitly, and force a complete libcurl.pc.
 s_curl() {
   cd "$SRC" || return 1
   rm -rf curl
@@ -116,21 +119,36 @@ s_curl() {
     --without-libpsl --without-zlib --without-brotli --without-zstd \
     --disable-ldap --disable-threaded-resolver --disable-manual \
     --without-libidn2 --without-nghttp2 --disable-aws --disable-mqtt \
-    LDFLAGS="-L$PREFIX/lib -lws2_32 -lsecur32 -lcrypt32 -lbcrypt -ladvapi32"
+    LDFLAGS="-L$PREFIX/lib $WINLIBS"
   make -j"$JOBS" -C lib
   make -j"$JOBS" -C include
   make install -C lib
-  make install -C include
-  [ -f "$PREFIX/lib/pkgconfig/libcurl.pc" ] || printf 'prefix=%s\nlibdir=${prefix}/lib\nincludedir=${prefix}/include\n\nName: libcurl\nDescription: curl\nVersion: 8\nLibs: -L${libdir} -lcurl\nLibs.private: -lws2_32 -lsecur32 -lcrypt32 -lbcrypt -ladvapi32\nCflags: -I${includedir}\n' \
-    "$PREFIX" > "$PREFIX/lib/pkgconfig/libcurl.pc"
+  make install -C include || true
+
+  # Explicit header install: this is what tatsu needs.
+  mkdir -p "$PREFIX/include/curl"
+  cp -f include/curl/*.h "$PREFIX/include/curl/" 2>/dev/null || true
+  mkdir -p "$PREFIX/include/curl"
+  [ -f "$PREFIX/include/curl/curl.h" ] || { echo "FATAL: curl.h missing after install"; return 1; }
+  echo "curl headers installed: $(ls "$PREFIX/include/curl" | wc -l) files"
+
+  # Always overwrite: Windows system libs go in Libs (not only Libs.private)
+  # because consumers here link the static libcurl without --static.
+  printf 'prefix=%s\nlibdir=${prefix}/lib\nincludedir=${prefix}/include\n\nName: libcurl\nDescription: libcurl\nVersion: 8.0.0\nLibs: -L${libdir} -lcurl %s\nLibs.private: %s\nCflags: -I${includedir}\n' \
+    "$PREFIX" "$WINLIBS" "$WINLIBS" > "$PREFIX/lib/pkgconfig/libcurl.pc"
   return 0
 }
 
-# diag2.txt run #9: tatsu failed ONLY on "libcurl >= 7.0 ... not found",
-# because curl built AFTER tatsu. Fix = stage order (curl first).
+# run #9/#10: needs libplist + libcurl (both built above, curl first).
+# libcurl_CFLAGS/libcurl_LIBS passed explicitly so configure cannot miss them.
 s_tatsu() {
+  export libcurl_CFLAGS="-I$PREFIX/include"
+  export libcurl_LIBS="-L$PREFIX/lib -lcurl $WINLIBS"
+  export libplist_CFLAGS="-I$PREFIX/include"
+  export libplist_LIBS="-L$PREFIX/lib -lplist-2.0"
   autotools_stage libtatsu https://github.com/libimobiledevice/libtatsu.git \
-    --enable-static --disable-shared
+    --enable-static --disable-shared \
+    LDFLAGS="-L$PREFIX/lib $WINLIBS"
 }
 
 s_imd() {
@@ -139,8 +157,8 @@ s_imd() {
     LDFLAGS="-L$PREFIX/lib -lws2_32 -lcrypt32 -liphlpapi"
 }
 
-# diag2.txt run #9: openssl backend not detected through our hand-written .pc.
-# wincng = Windows native crypto (bcrypt/crypt32), needs NO openssl at all.
+# run #9: openssl backend not detected via hand-written .pc.
+# wincng = native Windows crypto, needs no openssl.
 s_ssh2() {
   local v=1.11.1
   fetch "libssh2-$v" "https://github.com/libssh2/libssh2/releases/download/libssh2-$v/libssh2-$v.tar.gz" || return 1
@@ -168,7 +186,14 @@ run_stage libssh2            s_ssh2
   echo "########## SUMMARY ##########"
   for r in "${RESULTS[@]}"; do echo "${r/|/  }"; done
   echo
-  for p in openssl libusb-1.0 libplist-2.0 libirecovery-1.0 libimobiledevice-1.0 libssh2 libcurl; do
+  if [ -f "$PREFIX/include/curl/curl.h" ]; then
+    echo "curl headers: PRESENT"
+  else
+    echo "curl headers: MISSING"
+  fi
+  echo
+  for p in openssl libusb-1.0 libplist-2.0 libirecovery-1.0 libtatsu-1.0 \
+           libimobiledevice-1.0 libssh2 libcurl; do
     if pkg-config --exists "$p"; then
       echo "OK       $p $(pkg-config --modversion "$p")"
     else

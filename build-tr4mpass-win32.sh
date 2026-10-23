@@ -6,16 +6,22 @@ export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig"
 export PKG_CONFIG_LIBDIR="$PREFIX/lib/pkgconfig"
 export PATH="$PREFIX/bin:$PATH"
 
-# libtatsu added: static libimobiledevice pulls its symbols (run #8 finding)
 LIBS="libimobiledevice-1.0 libirecovery-1.0 libusb-1.0 libplist-2.0 openssl libcurl libssh2 libtatsu-1.0"
 
 CF="$(pkg-config --cflags $LIBS)"
-# --static is required: several libs are static archives now, and their
-# private Winsock/crypto deps live in Libs.private, which plain --libs drops.
+# --static: several libs are static archives; their private deps live in
+# Libs.private, which plain --libs drops.
 LF="$(pkg-config --static --libs $LIBS)"
 
+echo "=== pkg-config visibility ==="
+for p in $LIBS; do
+  if pkg-config --exists "$p"; then echo "found    $p"; else echo "MISSING  $p"; fi
+done
+echo "=== curl header ==="
+ls -l "$PREFIX/include/curl/curl.h" 2>/dev/null || echo "NO curl.h"
+
 make clean || true
-touch .chip-db-canary   # canary would build+run a Windows exe; impossible on Linux
+touch .chip-db-canary   # canary builds+runs a Windows exe; impossible on Linux
 
 make -j"$(nproc)" \
   CC=i686-w64-mingw32-gcc \
