@@ -1,49 +1,41 @@
-name: probe-win32
+name: build-win32-exe
 on:
   push:
   workflow_dispatch:
 
 jobs:
-  probe:
-    runs-on: windows-latest
-    defaults:
-      run:
-        shell: msys2 {0}
+  crossbuild:
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
-      - uses: msys2/setup-msys2@v2
-        with:
-          msystem: MINGW32
-          install: base-devel make pkg-config
-
-      - name: Probe i686 packages
+      - name: Install i686 cross toolchain
         run: |
-          {
-            echo "gcc target: $(gcc -dumpmachine)"
-            echo "uname: $(uname -s -m)"
-            echo "repos: $(pacman-conf --repo-list | tr '\n' ' ')"
-            for p in mingw-w64-i686-toolchain mingw-w64-i686-pkgconf \
-                     mingw-w64-i686-libimobiledevice mingw-w64-i686-libirecovery \
-                     mingw-w64-i686-libusb mingw-w64-i686-libplist \
-                     mingw-w64-i686-openssl mingw-w64-i686-curl \
-                     mingw-w64-i686-libssh2; do
-              if pacman -Si "$p" >/dev/null 2>&1; then
-                echo "FOUND|$p|$(pacman -Si "$p" | awk -F': *' '/^Version/{print $2; exit}')"
-              else
-                echo "MISSING|$p|-"
-              fi
-            done
-          } | tee probe-results.txt
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-mingw-w64-i686 g++-mingw-w64-i686 binutils-mingw-w64-i686 \
+            autoconf automake libtool pkg-config make git curl wget \
+            xz-utils pkgconf perl
 
-          echo '## Probe results' >> "$GITHUB_STEP_SUMMARY"
-          echo '' >> "$GITHUB_STEP_SUMMARY"
-          echo '| status | package | version |' >> "$GITHUB_STEP_SUMMARY"
-          echo '|---|---|---|' >> "$GITHUB_STEP_SUMMARY"
-          awk -F'|' '{printf "| %s | %s | %s |\n", $1, $2, $3}' probe-results.txt >> "$GITHUB_STEP_SUMMARY"
+      - name: Build dependency stack for Windows 32-bit
+        run: bash build-win32.sh 2>&1 | tee build-win32.log
+
+      - name: Compile tr4mpass.exe
+        run: bash build-tr4mpass-win32.sh 2>&1 | tee tr4mpass-build.log
+
+      - name: Show what was produced
+        if: always()
+        run: |
+          ls -l tr4mpass.exe || true
+          file tr4mpass.exe || true
+          ls -l win32dll/ || true
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: probe-results
-          path: probe-results.txt
+          name: win32-output
+          path: |
+            tr4mpass.exe
+            win32dll/*.dll
+            build-win32.log
+            tr4mpass-build.log
