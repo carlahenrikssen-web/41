@@ -157,8 +157,8 @@ openssl_CFLAGS="-I$PREFIX/include"
 openssl_LIBS="-L$PREFIX/lib -lssl -lcrypto $WINLIBS"
 export openssl_CFLAGS openssl_LIBS
 
-IMD_CPPFLAGS="-I$PREFIX/include -I$SHIM"
-IMD_CFLAGS="-O2 -I$PREFIX/include -I$SHIM"
+IMD_CPPFLAGS="-I$PREFIX/include -I$SHIM -DLIBUSBMUXD_STATIC -DLIMD_GLUE_STATIC -DLIBPLIST_STATIC -DIRECV_STATIC"
+IMD_CFLAGS="-O2 -I$PREFIX/include -I$SHIM -DLIBUSBMUXD_STATIC -DLIMD_GLUE_STATIC -DLIBPLIST_STATIC -DIRECV_STATIC"
 IMD_LDFLAGS="-L$PREFIX/lib $WINLIBS"
 
 if ./configure \
@@ -215,7 +215,7 @@ for p in libimobiledevice-1.0 libirecovery-1.0 libusb-1.0 libplist-2.0 openssl l
     echo "WARN    missing $p"
   fi
 done
-CF="-I$SHIM $CF"
+CF="-I$SHIM -DLIBUSBMUXD_STATIC -DLIMD_GLUE_STATIC -DLIBPLIST_STATIC -DIRECV_STATIC $CF"
 LF="$LF $WINLIBS"
 echo "CF=[$CF]"
 echo "LF=[$LF]"
