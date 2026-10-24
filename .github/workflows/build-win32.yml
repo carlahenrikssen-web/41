@@ -26,18 +26,13 @@ jobs:
       - name: Build dependency stack
         run: bash build-win32.sh 2>&1 | tee build-win32.log || true
 
-      - name: Repair openssl headers
-        run: bash fix-openssl.sh 2>&1 | tee fix-openssl.log || true
+      - name: Finish stack, headers, compile
+        run: bash fix-all.sh 2>&1 | tee fix-all.log || true
 
-      - name: Finish libimobiledevice
-        run: bash stage-final.sh 2>&1 | tee stage-final.log || true
-
-      - name: Report summary
+      - name: Report
         run: |
-          cat logs/summary.txt || true
-          echo
-          grep -E 'IMD_RESULT|found|MISSING' stage-final.log || true
-          grep -E 'curl headers' logs/summary.txt || true
+          grep -E 'HDR |OPENSSL_HEADERS|IMD |WARN|CFLAGS_EXTRA' fix-all.log || true
+          grep -E 'error:|undefined reference|NO_EXE|PE32' fix-all.log || true
 
       - name: Compile tr4mpass.exe
         run: bash build-tr4mpass-win32.sh 2>&1 | tee tr4mpass-build.log || true
@@ -62,3 +57,4 @@ jobs:
             logs/summary.txt
             stage-final.log
             tr4mpass-build.log
+            fix-all.log
