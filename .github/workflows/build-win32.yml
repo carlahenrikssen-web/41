@@ -26,22 +26,13 @@ jobs:
       - name: Build dependency stack
         run: bash build-win32.sh 2>&1 | tee build-win32.log || true
 
-      - name: Finish stack, headers, compile
-        run: bash fix-all.sh 2>&1 | tee fix-all.log || true
-
-      - name: Report
-        run: |
-          grep -E 'HDR |OPENSSL_HEADERS|IMD |WARN|CFLAGS_EXTRA' fix-all.log || true
-          grep -E 'error:|undefined reference|NO_EXE|PE32' fix-all.log || true
-
-      - name: Compile tr4mpass.exe
-        run: bash build-tr4mpass-win32.sh 2>&1 | tee tr4mpass-build.log || true
+      - name: Fix openssl, build libimobiledevice, compile
+        run: bash fix2.sh 2>&1 | tee fix2.log || true
 
       - name: Gate - an exe must exist
         run: |
           if [ ! -f tr4mpass.exe ]; then
-            echo "::error::tr4mpass.exe was not produced - see tr4mpass-build.log"
-            tail -40 tr4mpass-build.log || true
+            echo "::error::tr4mpass.exe was not produced"
             exit 1
           fi
           file tr4mpass.exe
@@ -55,6 +46,4 @@ jobs:
             win32dll/*.dll
             logs/*.log
             logs/summary.txt
-            stage-final.log
-            tr4mpass-build.log
-            fix-all.log
+            fix2.log
