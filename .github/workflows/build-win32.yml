@@ -26,6 +26,9 @@ jobs:
       - name: Build dependency stack
         run: bash build-win32.sh 2>&1 | tee build-win32.log || true
 
+      - name: Repair openssl headers
+        run: bash fix-openssl.sh 2>&1 | tee fix-openssl.log || true
+
       - name: Finish libimobiledevice
         run: bash stage-final.sh 2>&1 | tee stage-final.log || true
 
