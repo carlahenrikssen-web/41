@@ -80,64 +80,6 @@ fi
 # ============================================================
 # 2. libimobiledevice 1.3.0 (master needs an ifaddrs patch)
 # ============================================================
-step "2 libimobiledevice 1.3.0"
-IMV=1.3.0
-cd "$SRC" || exit 1
-
-if [ ! -d "$SRC/libimobiledevice-$IMV" ]; then
-  if [ ! -s "libimobiledevice-$IMV.tar.bz2" ]; then
-    curl -fsSL -o "libimobiledevice-$IMV.tar.bz2" \
-      "https://github.com/libimobiledevice/libimobiledevice/releases/download/$IMV/libimobiledevice-$IMV.tar.bz2" \
-      || echo "IMD_TARBALL_UNAVAILABLE"
-  fi
-  if [ -s "libimobiledevice-$IMV.tar.bz2" ]; then
-    tar xjf "libimobiledevice-$IMV.tar.bz2" || { echo "IMD_TAR_FAILED"; exit 1; }
-  else
-    echo "IMD_FALLBACK git tag $IMV"
-    rm -rf "libimobiledevice-$IMV"
-    git clone --depth 1 --branch "$IMV" \
-      https://github.com/libimobiledevice/libimobiledevice.git \
-      "libimobiledevice-$IMV" || { echo "IMD_CLONE_FAILED"; exit 1; }
-  fi
-fi
-
-cd "$SRC/libimobiledevice-$IMV" || exit 1
-if [ ! -x ./configure ]; then
-  ( NOCONFIGURE=1 ./autogen.sh ) > ag.out 2>&1 \
-    || { echo "IMD_AUTOGEN_FAILED"; tail -20 ag.out; exit 1; }
-fi
-
-if ./configure --host="$HOST" --build="$(gcc -dumpmachine)" --prefix="$PREFIX" \
-     --enable-static --disable-shared --without-cython \
-     LDFLAGS="-L$PREFIX/lib $WINLIBS" > cfg.out 2>&1; then
-  echo "IMD_CONFIGURE OK"
-  grep -nE 'checking for openssl' cfg.out || true
-else
-  echo "IMD_CONFIGURE_FAILED"
-  grep -nE 'error|not found|openssl' cfg.out | tail -15
-  exit 1
-fi
-
-if make -j"$JOBS" > mk.out 2>&1; then
-  echo "IMD_MAKE OK"
-else
-  echo "IMD_MAKE_FAILED"
-  grep -nE 'error:|undefined reference|No such file' mk.out | head -15
-  exit 1
-fi
-
-make -C src install > /dev/null 2>&1 || true
-make -C include install > /dev/null 2>&1 || true
-if pkg-config --exists libimobiledevice-1.0; then
-  echo "IMD OK $(pkg-config --modversion libimobiledevice-1.0)"
-else
-  echo "IMD_PKG_MISSING"
-  exit 1
-fi
-
-# ============================================================
-# 3. winsock shims
-# ============================================================
 step "3 shims"
 mkdir -p win32shim/netinet win32shim/arpa win32shim/sys
 printf '#ifndef TP_W_NETINET_IN_H\n#define TP_W_NETINET_IN_H\n#include <winsock2.h>\n#include <ws2tcpip.h>\n#endif\n' > win32shim/netinet/in.h
