@@ -18,15 +18,23 @@ jobs:
           sudo apt-get update -o Acquire::Retries=3 || echo "APT_UPDATE_NONFATAL"
           sudo apt-get install -y --no-install-recommends --fix-missing \
             gcc-mingw-w64-i686 g++-mingw-w64-i686 binutils-mingw-w64-i686 \
-            autoconf automake libtool pkg-config make git curl wget \
-            xz-utils pkgconf perl ca-certificates || echo "APT_INSTALL_NONFATAL"
+            autoconf automake autoconf-archive libtool libltdl-dev pkg-config \
+            make git curl wget xz-utils bzip2 pkgconf perl ca-certificates \
+          || echo "APT_INSTALL_NONFATAL"
           i686-w64-mingw32-gcc --version | head -1
 
-      - name: Build dependency stack for Windows 32-bit
-        run: bash build-win32.sh || true
+      - name: Build dependency stack
+        run: bash build-win32.sh 2>&1 | tee build-win32.log || true
+
+      - name: Finish libimobiledevice
+        run: bash stage-final.sh 2>&1 | tee stage-final.log || true
 
       - name: Report summary
-        run: cat logs/summary.txt
+        run: |
+          cat logs/summary.txt || true
+          echo
+          grep -E 'IMD_RESULT|found|MISSING' stage-final.log || true
+          grep -E 'curl headers' logs/summary.txt || true
 
       - name: Compile tr4mpass.exe
         run: bash build-tr4mpass-win32.sh 2>&1 | tee tr4mpass-build.log || true
@@ -34,7 +42,8 @@ jobs:
       - name: Gate - an exe must exist
         run: |
           if [ ! -f tr4mpass.exe ]; then
-            echo "::error::tr4mpass.exe was not produced - see logs/"
+            echo "::error::tr4mpass.exe was not produced - see tr4mpass-build.log"
+            tail -40 tr4mpass-build.log || true
             exit 1
           fi
           file tr4mpass.exe
@@ -48,4 +57,5 @@ jobs:
             win32dll/*.dll
             logs/*.log
             logs/summary.txt
+            stage-final.log
             tr4mpass-build.log
