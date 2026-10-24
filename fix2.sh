@@ -18,7 +18,7 @@ WINLIBS="-lws2_32 -liphlpapi -lcrypt32 -lsecur32 -lbcrypt -ladvapi32 -lgdi32 -lu
 step() { echo; echo "===== $* ====="; }
 
 # ---------------------------------------------------------------
-# 0. early winsock / ifaddrs shims (needed by several packages)
+# 0. early winsock / ifaddrs shims
 # ---------------------------------------------------------------
 step "0 early shims"
 SHIM="$SRC/win32shim"
@@ -73,7 +73,6 @@ static inline void freeifaddrs(struct ifaddrs *ifa) { (void)ifa; }
 #endif
 H
 
-# empty win32shim.h so any accidental -include does not fail
 : > "$SHIM/win32shim.h"
 
 echo "SHIM_DIR=$SHIM"
@@ -95,7 +94,6 @@ fi
 cd "openssl-$OV"
 make distclean >/dev/null 2>&1 || true
 
-# Configure for mingw (no-docs is unsupported on older Configure scripts)
 ./Configure mingw --prefix="\( PREFIX" --cross-compile-prefix=" \){HOST}-" \
   no-shared no-tests no-async no-dso \
   -I"$SHIM" > cfg.out 2>&1 || {
@@ -111,7 +109,6 @@ make -j"$JOBS" > mk.out 2>&1 || {
 }
 make install_sw > /dev/null
 
-# headers check
 for h in opensslv.h configuration.h opensslconf.h err.h ssl.h crypto.h evp.h; do
   if [ -f "$PREFIX/include/openssl/$h" ]; then
     echo "HDR OK      $h"
@@ -122,7 +119,6 @@ for h in opensslv.h configuration.h opensslconf.h err.h ssl.h crypto.h evp.h; do
 done
 echo "OPENSSL_HEADERS OK"
 
-# pkg-config files
 V=$(grep OPENSSL_VERSION_STR "$PREFIX/include/openssl/opensslv.h" | head -1 | sed 's/.*"\(.*\)".*/\1/')
 printf 'prefix=%s
 libdir=${prefix}/lib
@@ -163,7 +159,7 @@ Cflags: -I${includedir}
 echo "OPENSSL_PC OK $V"
 
 # ---------------------------------------------------------------
-# 2. libimobiledevice 1.3.0 (with shims + explicit flags)
+# 2. libimobiledevice 1.3.0
 # ---------------------------------------------------------------
 step "2 libimobiledevice 1.3.0"
 IMV=1.3.0
@@ -233,7 +229,6 @@ make install > inst.out 2>&1 || {
   echo "IMD_INSTALL_PARTIAL"
 }
 
-# ensure .pc exists
 if [ ! -f "$PREFIX/lib/pkgconfig/libimobiledevice-1.0.pc" ]; then
   PC=$(find . -name 'libimobiledevice-1.0.pc' 2>/dev/null | head -1)
   if [ -n "$PC" ]; then
@@ -253,7 +248,7 @@ else
 fi
 
 # ---------------------------------------------------------------
-# 3. (kept for compatibility – shims already created in step 0)
+# 3. shims (already done)
 # ---------------------------------------------------------------
 step "3 shims"
 ls -l "$SHIM"/netinet/in.h "$SHIM"/arpa/inet.h "$SHIM"/sys/socket.h "$SHIM"/ifaddrs.h
@@ -273,35 +268,22 @@ for p in libimobiledevice-1.0 libirecovery-1.0 libusb-1.0 libplist-2.0 openssl l
     echo "WARN    missing $p"
   fi
 done
-# always add the shim include and the Windows libs
 CF="-I$SHIM $CF"
 LF="$LF $WINLIBS"
 echo "CF=[$CF]"
 echo "LF=[$LF]"
 
 # ---------------------------------------------------------------
-# 5. makefile canary (optional)
+# 5. makefile canary
 # ---------------------------------------------------------------
 step "5 makefile canary"
-# (kept empty / for future use)
 
 # ---------------------------------------------------------------
-# 6. final compile of tr4mpass (adjust source list if needed)
+# 6. final compile stage
 # ---------------------------------------------------------------
 step "6 compile"
 cd "$SRC" || exit 1
-
-# example – replace with the real sources you use
-# ${HOST}-gcc -o tr4mpass.exe ... $CF $LF ...
-
-# For now just report that we reached here successfully
 echo "REACHED_COMPILE_STAGE"
-# If you already have a Makefile that builds tr4mpass.exe, call it here:
-# make -f your-makefile HOST=$HOST PREFIX=$PREFIX CF="$CF" LF="$LF" || {
-#   echo "NO_EXE"
-#   exit 1
-# }
-
 if [ -f tr4mpass.exe ]; then
   file tr4mpass.exe
   echo "PE32 OK"
