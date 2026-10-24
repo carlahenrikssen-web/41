@@ -131,7 +131,7 @@ if [ ! -f "$PREFIX/lib/libcurl.a" ] && [ ! -f "$PREFIX/lib/libcurl.dll.a" ]; the
   tar xf curl-8.11.1.tar.xz || { echo "CURL_TAR_FAILED"; exit 1; }
   cd curl-8.11.1 || exit 1
   ./configure --host="$HOST" --build="$(gcc -dumpmachine)" --prefix="$PREFIX" \
-    --enable-static --disable-shared --with-schannel --without-ssl \
+    --enable-static --disable-shared --with-schannel \
     --without-libpsl --without-zlib --without-brotli --without-zstd \
     --disable-ldap --disable-threaded-resolver --disable-manual \
     --without-libidn2 --without-nghttp2 --disable-aws --disable-mqtt \
