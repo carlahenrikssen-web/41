@@ -49,7 +49,7 @@ openssl_stage() {
   for v in 3.0.15 3.0.13 3.0.11; do
     if fetch "openssl-\$v" "https://github.com/openssl/openssl/releases/download/openssl-\$v/openssl-\$v.tar.gz"; then
       cd "\$SRC/openssl-\$v" || return 1
-      ./Configure mingw no-shared no-tests no-docs \
+      ./Configure mingw no-shared no-tests \
         --prefix="\$PREFIX" --cross-compile-prefix="\$HOST-"
       make -j"\$JOBS" build_libs
       make install_sw
