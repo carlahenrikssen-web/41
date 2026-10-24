@@ -34,7 +34,7 @@ rm -rf "openssl-$V"
 tar xzf "$TB" || { echo "OPENSSL_TAR_FAILED"; exit 1; }
 cd "openssl-$V" || exit 1
 
-./Configure mingw no-shared no-tests no-docs \
+./Configure mingw no-shared no-tests \
   --prefix="$PREFIX" --cross-compile-prefix="$HOST-" > cfg.out 2>&1 \
   || { echo "OPENSSL_CONFIGURE_FAILED"; tail -15 cfg.out; exit 1; }
 
