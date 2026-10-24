@@ -47,20 +47,54 @@ fetch() {
 openssl_stage() {
   local v
   for v in 3.0.15 3.0.13 3.0.11; do
-    if fetch "openssl-$v" "https://github.com/openssl/openssl/releases/download/openssl-$v/openssl-$v.tar.gz"; then
-      cd "$SRC/openssl-$v" || return 1
+    if fetch "openssl-\$v" "https://github.com/openssl/openssl/releases/download/openssl-\$v/openssl-\$v.tar.gz"; then
+      cd "\$SRC/openssl-\$v" || return 1
       ./Configure mingw no-shared no-tests no-docs \
-        --prefix="$PREFIX" --cross-compile-prefix="$HOST-" > /dev/null
-      make -j"$JOBS" build_libs
-      mkdir -p "$PREFIX/lib" "$PREFIX/include/openssl"
-      cp -f libcrypto.a libssl.a "$PREFIX/lib/" 2>/dev/null || true
-      cp -f include/openssl/*.h "$PREFIX/include/openssl/" 2>/dev/null || true
-      printf 'prefix=%s\nlibdir=${prefix}/lib\nincludedir=${prefix}/include\n\nName: OpenSSL\nDescription: OpenSSL\nVersion: %s\nLibs: -L${libdir} -lssl -lcrypto\nLibs.private: %s\nCflags: -I${includedir}\n' \
-        "$PREFIX" "$v" "$WINLIBS" > "$PREFIX/lib/pkgconfig/openssl.pc"
-      printf 'prefix=%s\nlibdir=${prefix}/lib\nincludedir=${prefix}/include\n\nName: libcrypto\nDescription: OpenSSL libcrypto\nVersion: %s\nLibs: -L${libdir} -lcrypto\nLibs.private: %s\nCflags: -I${includedir}\n' \
-        "$PREFIX" "$v" "$WINLIBS" > "$PREFIX/lib/pkgconfig/libcrypto.pc"
-      printf 'prefix=%s\nlibdir=${prefix}/lib\nincludedir=${prefix}/include\n\nName: libssl\nDescription: OpenSSL libssl\nVersion: %s\nLibs: -L${libdir} -lssl\nLibs.private: -lcrypto %s\nCflags: -I${includedir}\n' \
-        "$PREFIX" "$v" "$WINLIBS" > "$PREFIX/lib/pkgconfig/libssl.pc"
+        --prefix="\$PREFIX" --cross-compile-prefix="\$HOST-"
+      make -j"\$JOBS" build_libs
+      make install_sw
+      mkdir -p "\$PREFIX/include/openssl"
+      cp -a include/openssl/. "\$PREFIX/include/openssl/" 2>/dev/null || true
+      printf "prefix=%s
+libdir=\${prefix}/lib
+includedir=\${prefix}/include
+
+Name: OpenSSL
+Description: OpenSSL
+Version: %s
+Libs: -L\${libdir} -lssl -lcrypto
+Libs.private: %s
+Cflags: -I\${includedir}
+" \
+        "\$PREFIX" "\$v" "\$WINLIBS" > "\$PREFIX/lib/pkgconfig/openssl.pc"
+      printf "prefix=%s
+libdir=\${prefix}/lib
+includedir=\${prefix}/include
+
+Name: libcrypto
+Description: OpenSSL libcrypto
+Version: %s
+Libs: -L\${libdir} -lcrypto
+Libs.private: %s
+Cflags: -I\${includedir}
+" \
+        "\$PREFIX" "\$v" "\$WINLIBS" > "\$PREFIX/lib/pkgconfig/libcrypto.pc"
+      printf "prefix=%s
+libdir=\${prefix}/lib
+includedir=\${prefix}/include
+
+Name: libssl
+Description: OpenSSL libssl
+Version: %s
+Libs: -L\${libdir} -lssl
+Libs.private: -lcrypto %s
+Cflags: -I\${includedir}
+" \
+        "\$PREFIX" "\$v" "\$WINLIBS" > "\$PREFIX/lib/pkgconfig/libssl.pc"
+      for h in opensslv.h err.h ssl.h crypto.h; do
+        [ -f "\$PREFIX/include/openssl/\$h" ] || { echo "FATAL: missing openssl/\$h"; return 1; }
+      done
+      echo "OpenSSL \$v full headers + libs OK"
       return 0
     fi
   done
