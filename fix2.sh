@@ -248,11 +248,29 @@ echo "LF=[$LF]"
 
 # ---------- 4. final compile ----------
 step "4 compile"
-cd "$SRC"
+cd "$GITHUB_WORKSPACE"
+if [ ! -d "$GITHUB_WORKSPACE" ]; then
+  cd "$SRC"
+fi
 echo "REACHED_COMPILE_STAGE"
-if [ -f tr4mpass.exe ]; then
+export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+export PKG_CONFIG_LIBDIR="$PREFIX/lib/pkgconfig"
+
+make clean >/dev/null 2>&1 || true
+if make CC="${HOST}-gcc" \
+    CFLAGS="-O2 -Wall -Wextra -std=c99 -D_GNU_SOURCE ${CF} -I${PREFIX}/include -I${SHIM}" \
+    LDFLAGS="${LF}" \
+    -j"${JOBS}" > compile.out 2>&1; then
+  echo "PROJECT_BUILD_OK"
+  ls -l tr4mpass* 2>/dev/null || true
+  if [ -f tr4mpass ] && [ ! -f tr4mpass.exe ]; then
+    cp -f tr4mpass tr4mpass.exe
+  fi
+  [ -f tr4mpass.exe ] || { echo "TR4MPASS_EXE_MISSING"; exit 1; }
   file tr4mpass.exe
   echo "PE32 OK"
 else
-  echo "NO_EXE (add real build command for tr4mpass.exe here with CF and LF)"
+  echo "PROJECT_BUILD_FAILED"
+  tail -80 compile.out
+  exit 1
 fi
