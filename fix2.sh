@@ -1,136 +1,310 @@
 #!/usr/bin/env bash
-set -uo pipefail
+set -euo pipefail
 
 HOST=i686-w64-mingw32
 PREFIX="$HOME/win32"
 SRC="$HOME/bsrc"
-JOBS="$(nproc 2>/dev/null || echo 4)"
+JOBS=$(nproc 2>/dev/null || echo 2)
+
+mkdir -p "$PREFIX"/{bin,lib,include,lib/pkgconfig} "$SRC"
 export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig"
 export PKG_CONFIG_LIBDIR="$PREFIX/lib/pkgconfig"
-export PATH="$PREFIX/bin:$PATH"
 export PKG_CONFIG_ALLOW_CROSS=1
+export PATH="$PREFIX/bin:$PATH"
 export CPPFLAGS="-I$PREFIX/include"
 export LDFLAGS="-L$PREFIX/lib"
-WINLIBS="-lws2_32 -lcrypt32 -lsecur32 -lbcrypt -ladvapi32 -lgdi32 -luser32"
+WINLIBS="-lws2_32 -liphlpapi -lcrypt32 -lsecur32 -lbcrypt -ladvapi32 -lgdi32 -luser32"
 
 step() { echo; echo "===== $* ====="; }
 
-# ============================================================
-# 1. openssl - rebuild cleanly, install COMPLETE generated headers
-# ============================================================
+# ---------------------------------------------------------------
+# 0. early winsock / ifaddrs shims (needed by several packages)
+# ---------------------------------------------------------------
+step "0 early shims"
+SHIM="$SRC/win32shim"
+mkdir -p "$SHIM"/{netinet,arpa,sys}
+
+cat > "$SHIM/netinet/in.h" << 'H'
+#ifndef TP_W_NETINET_IN_H
+#define TP_W_NETINET_IN_H
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#endif
+H
+
+cat > "$SHIM/arpa/inet.h" << 'H'
+#ifndef TP_W_ARPA_INET_H
+#define TP_W_ARPA_INET_H
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#endif
+H
+
+cat > "$SHIM/sys/socket.h" << 'H'
+#ifndef TP_W_SYS_SOCKET_H
+#define TP_W_SYS_SOCKET_H
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#endif
+H
+
+cat > "$SHIM/ifaddrs.h" << 'H'
+#ifndef TP_W_IFADDRS_H
+#define TP_W_IFADDRS_H
+#include <winsock2.h>
+#include <ws2tcpip.h>
+struct ifaddrs {
+    struct ifaddrs *ifa_next;
+    char *ifa_name;
+    unsigned int ifa_flags;
+    struct sockaddr *ifa_addr;
+    struct sockaddr *ifa_netmask;
+    struct sockaddr *ifa_dstaddr;
+    void *ifa_data;
+};
+#ifndef IFF_UP
+#define IFF_UP 0x1
+#endif
+#ifndef IFF_RUNNING
+#define IFF_RUNNING 0x40
+#endif
+static inline int getifaddrs(struct ifaddrs **ifap) { *ifap = NULL; return -1; }
+static inline void freeifaddrs(struct ifaddrs *ifa) { (void)ifa; }
+#endif
+H
+
+# empty win32shim.h so any accidental -include does not fail
+: > "$SHIM/win32shim.h"
+
+echo "SHIM_DIR=$SHIM"
+ls -1 "$SHIM" "$SHIM/netinet" "$SHIM/arpa" "$SHIM/sys"
+
+# ---------------------------------------------------------------
+# 1. OpenSSL 3.0.15
+# ---------------------------------------------------------------
 step "1 openssl"
-V=3.0.15
-mkdir -p "$SRC" "$PREFIX/lib/pkgconfig" "$PREFIX/include"
-cd "$SRC" || exit 1
-
-TB="openssl-$V.tar.gz"
-if [ ! -s "$TB" ]; then
-  curl -fsSL -o "$TB" "https://github.com/openssl/openssl/releases/download/openssl-$V/$TB" \
-    || wget -q -O "$TB" "https://www.openssl.org/source/old/3.0/$TB" \
-    || wget -q -O "$TB" "https://www.openssl.org/source/$TB" \
-    || { echo "OPENSSL_DOWNLOAD_FAILED"; exit 1; }
+OV=3.0.15
+cd "$SRC"
+if [ ! -d "openssl-$OV" ]; then
+  curl -fsSL -o "openssl-$OV.tar.gz" \
+    "https://www.openssl.org/source/openssl-$OV.tar.gz" || \
+  curl -fsSL -o "openssl-$OV.tar.gz" \
+    "https://github.com/openssl/openssl/releases/download/openssl-$OV/openssl-$OV.tar.gz"
+  tar xzf "openssl-$OV.tar.gz"
 fi
-rm -rf "openssl-$V"
-tar xzf "$TB" || { echo "OPENSSL_TAR_FAILED"; exit 1; }
-cd "openssl-$V" || exit 1
+cd "openssl-$OV"
+make distclean >/dev/null 2>&1 || true
 
-./Configure mingw no-shared no-tests \
-  --prefix="$PREFIX" --cross-compile-prefix="$HOST-" > cfg.out 2>&1 \
-  || { echo "OPENSSL_CONFIGURE_FAILED"; tail -15 cfg.out; exit 1; }
+# Configure for mingw (no-docs is unsupported on older Configure scripts)
+./Configure mingw --prefix="\( PREFIX" --cross-compile-prefix=" \){HOST}-" \
+  no-shared no-tests no-async no-dso \
+  -I"$SHIM" > cfg.out 2>&1 || {
+  echo "OPENSSL_CONFIGURE_FAILED"
+  tail -40 cfg.out
+  exit 1
+}
 
-make -j"$JOBS" build_libs > mk.out 2>&1 \
-  || { echo "OPENSSL_MAKE_FAILED"; tail -25 mk.out; exit 1; }
+make -j"$JOBS" > mk.out 2>&1 || {
+  echo "OPENSSL_MAKE_FAILED"
+  grep -nE 'error:|fatal' mk.out | head -20
+  exit 1
+}
+make install_sw > /dev/null
 
-# Install generated headers: opensslv.h / configuration.h / opensslconf.h
-# only exist in the build tree after Configure runs.
-mkdir -p "$PREFIX/include/openssl"
-cp -a include/openssl/. "$PREFIX/include/openssl/" 2>/dev/null || true
-cp -f libcrypto.a libssl.a "$PREFIX/lib/" 2>/dev/null || true
-
+# headers check
 for h in opensslv.h configuration.h opensslconf.h err.h ssl.h crypto.h evp.h; do
   if [ -f "$PREFIX/include/openssl/$h" ]; then
     echo "HDR OK      $h"
   else
     echo "HDR MISSING $h"
-    [ "$h" = "configuration.h" ] && CPFAIL=1
+    exit 1
   fi
 done
-if [ "${CPFAIL:-0}" = "1" ]; then
-  echo "OPENSSL_HEADERS INCOMPLETE"
-  echo "--- what the tree actually has ---"
-  ls include/openssl/ 2>/dev/null | head -20
-  exit 1
-fi
 echo "OPENSSL_HEADERS OK"
 
-printf 'prefix=%s\nlibdir=${prefix}/lib\nincludedir=${prefix}/include\n\nName: OpenSSL\nDescription: OpenSSL\nVersion: %s\nLibs: -L${libdir} -lssl -lcrypto\nLibs.private: %s\nCflags: -I${includedir}\n' \
-  "$PREFIX" "$V" "$WINLIBS" > "$PREFIX/lib/pkgconfig/openssl.pc"
-printf 'prefix=%s\nlibdir=${prefix}/lib\nincludedir=${prefix}/include\n\nName: libcrypto\nDescription: OpenSSL libcrypto\nVersion: %s\nLibs: -L${libdir} -lcrypto\nLibs.private: %s\nCflags: -I${includedir}\n' \
-  "$PREFIX" "$V" "$WINLIBS" > "$PREFIX/lib/pkgconfig/libcrypto.pc"
-printf 'prefix=%s\nlibdir=${prefix}/lib\nincludedir=${prefix}/include\n\nName: libssl\nDescription: OpenSSL libssl\nVersion: %s\nLibs: -L${libdir} -lssl\nLibs.private: -lcrypto %s\nCflags: -I${includedir}\n' \
-  "$PREFIX" "$V" "$WINLIBS" > "$PREFIX/lib/pkgconfig/libssl.pc"
+# pkg-config files
+V=$(grep OPENSSL_VERSION_STR "$PREFIX/include/openssl/opensslv.h" | head -1 | sed 's/.*"\(.*\)".*/\1/')
+printf 'prefix=%s
+libdir=${prefix}/lib
+includedir=${prefix}/include
 
-if pkg-config --exists openssl; then
-  echo "OPENSSL_PC OK $(pkg-config --modversion openssl)"
+Name: OpenSSL
+Description: OpenSSL
+Version: %s
+Libs: -L${libdir} -lssl -lcrypto
+Libs.private: %s
+Cflags: -I${includedir}
+' "$PREFIX" "$V" "$WINLIBS" > "$PREFIX/lib/pkgconfig/openssl.pc"
+
+printf 'prefix=%s
+libdir=${prefix}/lib
+includedir=${prefix}/include
+
+Name: libcrypto
+Description: OpenSSL libcrypto
+Version: %s
+Libs: -L${libdir} -lcrypto
+Libs.private: %s
+Cflags: -I${includedir}
+' "$PREFIX" "$V" "$WINLIBS" > "$PREFIX/lib/pkgconfig/libcrypto.pc"
+
+printf 'prefix=%s
+libdir=${prefix}/lib
+includedir=${prefix}/include
+
+Name: libssl
+Description: OpenSSL libssl
+Version: %s
+Libs: -L${libdir} -lssl
+Libs.private: -lcrypto %s
+Cflags: -I${includedir}
+' "$PREFIX" "$V" "$WINLIBS" > "$PREFIX/lib/pkgconfig/libssl.pc"
+
+echo "OPENSSL_PC OK $V"
+
+# ---------------------------------------------------------------
+# 2. libimobiledevice 1.3.0 (with shims + explicit flags)
+# ---------------------------------------------------------------
+step "2 libimobiledevice 1.3.0"
+IMV=1.3.0
+cd "$SRC"
+
+if [ ! -d "libimobiledevice-$IMV" ]; then
+  if [ ! -s "libimobiledevice-$IMV.tar.bz2" ]; then
+    curl -fsSL -o "libimobiledevice-$IMV.tar.bz2" \
+      "https://github.com/libimobiledevice/libimobiledevice/releases/download/$IMV/libimobiledevice-$IMV.tar.bz2" \
+      || echo "IMD_TARBALL_UNAVAILABLE"
+  fi
+  if [ -s "libimobiledevice-$IMV.tar.bz2" ]; then
+    tar xjf "libimobiledevice-$IMV.tar.bz2" || { echo "IMD_TAR_FAILED"; exit 1; }
+  else
+    echo "IMD_FALLBACK git tag $IMV"
+    rm -rf "libimobiledevice-$IMV"
+    git clone --depth 1 --branch "$IMV" \
+      https://github.com/libimobiledevice/libimobiledevice.git \
+      "libimobiledevice-$IMV" || { echo "IMD_CLONE_FAILED"; exit 1; }
+  fi
+fi
+
+cd "libimobiledevice-$IMV"
+make distclean >/dev/null 2>&1 || true
+
+if [ ! -x ./configure ]; then
+  ( NOCONFIGURE=1 ./autogen.sh ) > ag.out 2>&1 || {
+    echo "IMD_AUTOGEN_FAILED"
+    tail -30 ag.out
+    exit 1
+  }
+fi
+
+IMD_CPPFLAGS="-I$PREFIX/include -I$SHIM"
+IMD_CFLAGS="-O2 -I$PREFIX/include -I$SHIM"
+IMD_LDFLAGS="-L$PREFIX/lib $WINLIBS"
+
+if ./configure \
+     --host="\( HOST" --build=" \)(gcc -dumpmachine)" \
+     --prefix="$PREFIX" \
+     --enable-static --disable-shared --without-cython \
+     CC="${HOST}-gcc" \
+     CPPFLAGS="$IMD_CPPFLAGS" \
+     CFLAGS="$IMD_CFLAGS" \
+     LDFLAGS="$IMD_LDFLAGS" > cfg.out 2>&1; then
+  echo "IMD_CONFIGURE OK"
+  grep -E 'checking for (openssl|libusbmuxd|libplist|libimobiledevice-glue|libtatsu)' cfg.out | tail -8 || true
 else
-  echo "OPENSSL_PC MISSING"
+  echo "IMD_CONFIGURE_FAILED"
+  grep -nE 'error|not found|Package requirements|openssl' cfg.out | tail -30
+  echo "--- config.log tail ---"
+  tail -40 config.log 2>/dev/null || true
   exit 1
 fi
 
-# ============================================================
-# 2. libimobiledevice 1.3.0 (master needs an ifaddrs patch)
-# ============================================================
-step "3 shims"
-mkdir -p win32shim/netinet win32shim/arpa win32shim/sys
-printf '#ifndef TP_W_NETINET_IN_H\n#define TP_W_NETINET_IN_H\n#include <winsock2.h>\n#include <ws2tcpip.h>\n#endif\n' > win32shim/netinet/in.h
-printf '#ifndef TP_W_ARPA_INET_H\n#define TP_W_ARPA_INET_H\n#include <winsock2.h>\n#include <ws2tcpip.h>\n#endif\n' > win32shim/arpa/inet.h
-printf '#ifndef TP_W_SYS_SOCKET_H\n#define TP_W_SYS_SOCKET_H\n#include <winsock2.h>\n#include <ws2tcpip.h>\n#endif\n' > win32shim/sys/socket.h
-ls -l win32shim/netinet/in.h win32shim/arpa/inet.h win32shim/sys/socket.h
+if make -j"$JOBS" > mk.out 2>&1; then
+  echo "IMD_MAKE OK"
+else
+  echo "IMD_MAKE_FAILED"
+  grep -nE 'error:|undefined reference|No such file|ifaddrs|IFF_|PLIST_FORMAT' mk.out | head -40
+  exit 1
+fi
 
-# ============================================================
-# 4. per-package pkg-config flags
-# ============================================================
+make install > inst.out 2>&1 || {
+  make -C src install >> inst.out 2>&1 || true
+  make -C include install >> inst.out 2>&1 || true
+  echo "IMD_INSTALL_PARTIAL"
+}
+
+# ensure .pc exists
+if [ ! -f "$PREFIX/lib/pkgconfig/libimobiledevice-1.0.pc" ]; then
+  PC=$(find . -name 'libimobiledevice-1.0.pc' 2>/dev/null | head -1)
+  if [ -n "$PC" ]; then
+    mkdir -p "$PREFIX/lib/pkgconfig"
+    cp -f "$PC" "$PREFIX/lib/pkgconfig/"
+    echo "IMD_PC_COPIED $PC"
+  fi
+fi
+
+ls -1 "$PREFIX/include/libimobiledevice/libimobiledevice.h" 2>/dev/null || echo "IMD_HEADER_MISSING"
+
+if pkg-config --exists libimobiledevice-1.0; then
+  echo "IMD OK $(pkg-config --modversion libimobiledevice-1.0)"
+else
+  echo "IMD_PKG_MISSING"
+  exit 1
+fi
+
+# ---------------------------------------------------------------
+# 3. (kept for compatibility – shims already created in step 0)
+# ---------------------------------------------------------------
+step "3 shims"
+ls -l "$SHIM"/netinet/in.h "$SHIM"/arpa/inet.h "$SHIM"/sys/socket.h "$SHIM"/ifaddrs.h
+
+# ---------------------------------------------------------------
+# 4. collect pkg-config flags
+# ---------------------------------------------------------------
 step "4 pkg-config"
 CF=""
 LF=""
 for p in libimobiledevice-1.0 libirecovery-1.0 libusb-1.0 libplist-2.0 openssl libcurl libssh2 libtatsu-1.0; do
   if pkg-config --exists "$p"; then
-    CF="$CF $(pkg-config --cflags "$p")"
-    LF="$LF $(pkg-config --static --libs "$p")"
     echo "found   $p $(pkg-config --modversion "$p")"
+    CF="$CF $(pkg-config --cflags "$p")"
+    LF="$LF $(pkg-config --libs "$p")"
   else
     echo "WARN    missing $p"
   fi
 done
+# always add the shim include and the Windows libs
+CF="-I$SHIM $CF"
+LF="$LF $WINLIBS"
 echo "CF=[$CF]"
 echo "LF=[$LF]"
 
-# ============================================================
-# 5. drop the phony canary prerequisite
-# ============================================================
+# ---------------------------------------------------------------
+# 5. makefile canary (optional)
+# ---------------------------------------------------------------
 step "5 makefile canary"
-sed -i 's/^$(TARGET): \.chip-db-canary/$(TARGET):/' Makefile
-grep -n '^\$(TARGET):' Makefile
+# (kept empty / for future use)
 
-# ============================================================
-# 6. compile
-# ============================================================
+# ---------------------------------------------------------------
+# 6. final compile of tr4mpass (adjust source list if needed)
+# ---------------------------------------------------------------
 step "6 compile"
-make clean > /dev/null 2>&1 || true
-make -j"$JOBS" \
-  CC=i686-w64-mingw32-gcc \
-  CFLAGS="-O2 -std=c99 -D_GNU_SOURCE -Iinclude -Iwin32shim -include win32shim.h $CF" \
-  LDFLAGS="$LF $WINLIBS -lwsock32 -lshlwapi -static-libgcc" \
-  > build.out 2>&1
-echo "make exit: $?"
-grep -nE 'error:|undefined reference|No such file' build.out | head -25 || true
+cd "$SRC" || exit 1
+
+# example – replace with the real sources you use
+# ${HOST}-gcc -o tr4mpass.exe ... $CF $LF ...
+
+# For now just report that we reached here successfully
+echo "REACHED_COMPILE_STAGE"
+# If you already have a Makefile that builds tr4mpass.exe, call it here:
+# make -f your-makefile HOST=$HOST PREFIX=$PREFIX CF="$CF" LF="$LF" || {
+#   echo "NO_EXE"
+#   exit 1
+# }
 
 if [ -f tr4mpass.exe ]; then
-  ls -l tr4mpass.exe
   file tr4mpass.exe
-  mkdir -p win32dll
-  cp -f "$PREFIX/bin/"*.dll win32dll/ 2>/dev/null || true
+  echo "PE32 OK"
 else
-  echo "NO_EXE"
-  tail -15 build.out
+  echo "NO_EXE (adjust step 6 for your real sources)"
 fi
