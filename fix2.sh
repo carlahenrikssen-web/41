@@ -120,18 +120,23 @@ pkg-config --exists openssl && echo "pkg-config openssl: OK" || { echo "pkg-conf
 # ---------- 1b. curl static lib check ----------
 step "1b curl check"
 if [ ! -f "$PREFIX/lib/libcurl.a" ] && [ ! -f "$PREFIX/lib/libcurl.dll.a" ]; then
-  echo "LIBCURL_MISSING - rebuilding curl static"
+  echo "LIBCURL_MISSING - building curl 8.11.1 static"
   cd "$SRC"
-  rm -rf curl
-  git clone --depth 1 https://github.com/curl/curl.git curl || { echo "CURL_CLONE_FAILED"; exit 1; }
-  cd curl
-  [ -x ./configure ] || NOCONFIGURE=1 ./buildconf > /dev/null 2>&1 || true
+  rm -rf curl-8.11.1
+  if [ ! -s curl-8.11.1.tar.xz ]; then
+    curl -fsSL -o curl-8.11.1.tar.xz "https://github.com/curl/curl/releases/download/curl-8_11_1/curl-8.11.1.tar.xz" \
+      || curl -fsSL -o curl-8.11.1.tar.xz "https://curl.se/download/curl-8.11.1.tar.xz" \
+      || { echo "CURL_DL_FAILED"; exit 1; }
+  fi
+  tar xf curl-8.11.1.tar.xz || { echo "CURL_TAR_FAILED"; exit 1; }
+  cd curl-8.11.1 || exit 1
   ./configure --host="$HOST" --build="$(gcc -dumpmachine)" --prefix="$PREFIX" \
     --enable-static --disable-shared --with-schannel --without-ssl \
     --without-libpsl --without-zlib --without-brotli --without-zstd \
     --disable-ldap --disable-threaded-resolver --disable-manual \
     --without-libidn2 --without-nghttp2 --disable-aws --disable-mqtt \
-    > cfg.out 2>&1 || { echo "CURL_CONFIGURE_FAILED"; tail -30 cfg.out; exit 1; }
+    --without-gssapi --without-librtmp \
+    > cfg.out 2>&1 || { echo "CURL_CONFIGURE_FAILED"; tail -40 cfg.out; exit 1; }
   make -j"$JOBS" > mk.out 2>&1 || { echo "CURL_MAKE_FAILED"; grep -nE 'error:' mk.out | head -15; exit 1; }
   make install > inst.out 2>&1 || { echo "CURL_INSTALL_FAILED"; tail -20 inst.out; exit 1; }
 fi
